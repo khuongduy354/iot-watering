@@ -1,0 +1,25 @@
+flowchart TD
+    subgraph Hardware
+        A[Humidity Sensor] -->|Analog Data| B[Arduino]
+        B -->|WiFi via MQTT| C[ESP8266]
+        B -->|Control Signal| E[Water Pump]
+    end
+
+    subgraph Cloud
+        C -->|MQTT Publish| D[MQTT Broker\n(e.g., Mosquitto, AWS IoT)]
+        D -->|MQTT Subscribe| F[(Database\nMongoDB Stream)]
+        D -->|MQTT Subscribe| G[Web UI]
+    end
+
+    subgraph Web Interface
+        G -->|MQTT Publish| D
+        D -->|MQTT Subscribe| C --> B --> E
+    end
+
+    style A fill:#cff,stroke:#333
+    style B fill:#cff,stroke:#333
+    style C fill:#cff,stroke:#333
+    style E fill:#cff,stroke:#333
+    style D fill:#f9f,stroke:#333
+    style F fill:#fcf,stroke:#333
+    style G fill:#cfc,stroke:#333
