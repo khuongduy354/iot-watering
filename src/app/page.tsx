@@ -16,7 +16,13 @@ const SENSOR_DRY_VALUE = 880; // Sensor reading in dry soil
 const SENSOR_WET_VALUE = 460; // Sensor reading in wet soil
 
 // Mock data - simulating soil moisture readings
-const generateMockData = (date: Date) => {
+type sensorData = {
+  time: string; // Time in HH:MM format
+  moisture: number; // Moisture percentage (0-100%)
+  rawValue: number; // Raw sensor value (460-880)
+  date: string; // ISO date string
+};
+const generateMockData = (date: Date): sensorData[] => {
   return Array.from({ length: 24 }, (_, i) => {
     // Simulate raw sensor value between wet and dry (460-880)
     const rawValue = Math.floor(
@@ -250,6 +256,7 @@ export default function Home() {
               ? "Showing moisture percentage (0-100%) calculated from sensor readings"
               : `Showing raw sensor values (${SENSOR_WET_VALUE} = wet, ${SENSOR_DRY_VALUE} = dry)`}
           </p>
+
           <div className="h-[400px] transition-all duration-300">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={mockData}>
