@@ -10,6 +10,8 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { useState, useEffect } from "react";
+import SoilMoisture from "@/models/SoilMoisture";
+import connectDB from "@/lib/mongodb";
 
 // Constants for soil moisture calibration
 const SENSOR_DRY_VALUE = 880; // Sensor reading in dry soil
@@ -26,7 +28,7 @@ const generateMockData = (date: Date) => {
     // Convert to percentage (0-100%)
     const moisturePercentage = Math.floor(
       ((SENSOR_DRY_VALUE - rawValue) / (SENSOR_DRY_VALUE - SENSOR_WET_VALUE)) *
-        100
+      100
     );
 
     return {
@@ -55,6 +57,28 @@ export default function Home() {
   const [mockData, setMockData] = useState(
     generateMockData(new Date(selectedDate))
   );
+  useEffect(
+    // TODO: mongodb change stream test
+    () => {
+      async function fetchData() {
+        const mongodb = await connectDB();
+        const collection = mongodb.models.SoilMoisture || mongodb.model("SoilMoisture");
+
+        if(!collection){ 
+          console.log("No collection")
+          return;
+        }
+
+        // Everytime a change happens in the stream, add it to the list of events
+        for await (const change of collection.watch()) {
+          console.log(change);
+        } 
+      }
+
+      fetchData();
+    }
+    , []
+  )
 
   // Realtime data simulation
   useEffect(() => {
@@ -69,12 +93,12 @@ export default function Home() {
           const hour = now.getHours();
           const rawValue = Math.floor(
             Math.random() * (SENSOR_DRY_VALUE - SENSOR_WET_VALUE) +
-              SENSOR_WET_VALUE
+            SENSOR_WET_VALUE
           );
           const moisturePercentage = Math.floor(
             ((SENSOR_DRY_VALUE - rawValue) /
               (SENSOR_DRY_VALUE - SENSOR_WET_VALUE)) *
-              100
+            100
           );
 
           newData[hour] = {
@@ -182,9 +206,8 @@ export default function Home() {
             </div>
           </div>
           <div
-            className={`flex gap-2 overflow-x-auto pb-2 -mx-2 px-2 ${
-              isRealtime ? "opacity-50" : ""
-            }`}
+            className={`flex gap-2 overflow-x-auto pb-2 -mx-2 px-2 ${isRealtime ? "opacity-50" : ""
+              }`}
           >
             {MOCK_DATES.map((date) => (
               <button
@@ -193,10 +216,9 @@ export default function Home() {
                 disabled={isRealtime}
                 className={`
                   min-w-[100px] px-4 py-2 rounded-lg font-medium
-                  ${
-                    date.toISOString() === selectedDate.toISOString()
-                      ? "bg-blue-600 text-white shadow-lg"
-                      : "bg-gray-100 text-gray-800 hover:bg-gray-200 hover:shadow"
+                  ${date.toISOString() === selectedDate.toISOString()
+                    ? "bg-blue-600 text-white shadow-lg"
+                    : "bg-gray-100 text-gray-800 hover:bg-gray-200 hover:shadow"
                   }
                   transition-all duration-150 transform hover:-translate-y-0.5
                 `}
@@ -225,21 +247,19 @@ export default function Home() {
             <div className="flex gap-2">
               <button
                 onClick={() => setViewMode("percentage")}
-                className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${
-                  viewMode === "percentage"
+                className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${viewMode === "percentage"
                     ? "bg-blue-600 text-white shadow-md"
                     : "bg-gray-100 text-gray-700 hover:bg-gray-200 hover:shadow"
-                } transition-all duration-150`}
+                  } transition-all duration-150`}
               >
                 <span className="text-lg">📊</span> Percentage
               </button>
               <button
                 onClick={() => setViewMode("raw")}
-                className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${
-                  viewMode === "raw"
+                className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${viewMode === "raw"
                     ? "bg-blue-600 text-white shadow-md"
                     : "bg-gray-100 text-gray-700 hover:bg-gray-200 hover:shadow"
-                } transition-all duration-150`}
+                  } transition-all duration-150`}
               >
                 <span className="text-lg">📈</span> Raw Values
               </button>
@@ -304,18 +324,16 @@ export default function Home() {
               className={`
                 px-6 py-3 rounded-lg font-medium text-white
                 flex items-center gap-2 relative overflow-hidden
-                ${
-                  isWatering
-                    ? "bg-gradient-to-r from-blue-400 to-cyan-400 cursor-not-allowed"
-                    : "bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+                ${isWatering
+                  ? "bg-gradient-to-r from-blue-400 to-cyan-400 cursor-not-allowed"
+                  : "bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
                 }
                 transition-all duration-150
               `}
             >
               <span
-                className={`w-4 h-4 rounded-full ${
-                  isWatering ? "animate-ping bg-white/50" : "bg-white/90"
-                }`}
+                className={`w-4 h-4 rounded-full ${isWatering ? "animate-ping bg-white/50" : "bg-white/90"
+                  }`}
               />
               {isWatering ? "Watering..." : "Water Now"}
             </button>
@@ -341,10 +359,9 @@ export default function Home() {
                 disabled={isWatering}
                 className={`
                   w-16 px-2 py-1 rounded border text-center
-                  ${
-                    isWatering
-                      ? "bg-gray-100 border-gray-300"
-                      : "bg-white border-cyan-200 hover:border-cyan-500 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-200"
+                  ${isWatering
+                    ? "bg-gray-100 border-gray-300"
+                    : "bg-white border-cyan-200 hover:border-cyan-500 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-200"
                   }
                   transition-all duration-150 outline-none
                 `}
