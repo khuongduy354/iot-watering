@@ -9,13 +9,15 @@ type SoilMoistureBody = {
 }
 export async function POST(request: Request) {
   try {
-    await connectDB();
     const body: SoilMoistureBody = await request.json();
+    console.log(body)
     
+    const isoTimestamp = new Date(body.timestamp * 1000).toISOString();
+    await connectDB();
     const moistureData = new SoilMoisture({
       rawValue: body.rawValue,
       moisturePercentage: body.moisturePercentage,
-      timestamp: body.timestamp
+      timestamp: isoTimestamp
     });
 
     console.log(moistureData); 

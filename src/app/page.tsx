@@ -12,123 +12,210 @@ import {
 import { useState, useEffect } from "react";
 import SoilMoisture from "@/models/SoilMoisture";
 import connectDB from "@/lib/mongodb";
-
 // Constants for soil moisture calibration
 const SENSOR_DRY_VALUE = 880; // Sensor reading in dry soil
 const SENSOR_WET_VALUE = 460; // Sensor reading in wet soil
 
-// Mock data - simulating soil moisture readings
-const generateMockData = (date: Date) => {
-  return Array.from({ length: 24 }, (_, i) => {
-    // Simulate raw sensor value between wet and dry (460-880)
-    const rawValue = Math.floor(
-      Math.random() * (SENSOR_DRY_VALUE - SENSOR_WET_VALUE) + SENSOR_WET_VALUE
-    );
-
-    // Convert to percentage (0-100%)
-    const moisturePercentage = Math.floor(
-      ((SENSOR_DRY_VALUE - rawValue) / (SENSOR_DRY_VALUE - SENSOR_WET_VALUE)) *
-      100
-    );
-
-    return {
-      time: `${i}:00`,
-      moisture: moisturePercentage,
-      rawValue: rawValue,
-      date: new Date(date.setHours(i, 0, 0, 0)).toISOString(),
-    };
-  });
-};
-
-const MOCK_DATES = [
-  new Date("2025-07-11"),
-  new Date("2025-07-10"),
-  new Date("2025-07-09"),
-  new Date("2025-07-08"),
-  new Date("2025-07-07"),
-];
-
 export default function Home() {
   const [isWatering, setIsWatering] = useState(false);
   const [waterDuration, setWaterDuration] = useState(5);
-  const [selectedDate, setSelectedDate] = useState(MOCK_DATES[0]);
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [viewMode, setViewMode] = useState<"percentage" | "raw">("percentage");
   const [isRealtime, setIsRealtime] = useState(false);
-  const [mockData, setMockData] = useState(
-    generateMockData(new Date(selectedDate))
-  );
-  useEffect(
-    // TODO: mongodb change stream test
-    () => {
-      async function fetchData() {
-        const mongodb = await connectDB();
-        const collection = mongodb.models.SoilMoisture || mongodb.model("SoilMoisture");
-
-        if(!collection){ 
-          console.log("No collection")
-          return;
-        }
-
-        // Everytime a change happens in the stream, add it to the list of events
-        for await (const change of collection.watch()) {
-          console.log(change);
-        } 
-      }
-
-      fetchData();
-    }
-    , []
-  )
-
-  // Realtime data simulation
+  type ChartDatum = {
+    time: string;
+    moisture: number;
+    rawValue: number;
+    date: string;
+    dateObj: Date;
+  };
+  const [chartData, setChartData] = useState<ChartDatum[]>([]); // all historical data
+  const [filteredChartData, setFilteredChartData] = useState<ChartDatum[]>([]); // data for selected date
+  const [liveData, setLiveData] = useState<Record<string, ChartDatum>>({});
+  const [availableDates, setAvailableDates] = useState<Date[]>([]);
+  // Live sensor data via SSE
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    const eventSource = new EventSource('/api/soil-moisture');
 
-    if (isRealtime) {
-      // Update latest data point every 2 seconds
-      interval = setInterval(() => {
-        setMockData((current) => {
-          const newData = [...current];
-          const now = new Date();
-          const hour = now.getHours();
-          const rawValue = Math.floor(
-            Math.random() * (SENSOR_DRY_VALUE - SENSOR_WET_VALUE) +
-            SENSOR_WET_VALUE
-          );
-          const moisturePercentage = Math.floor(
-            ((SENSOR_DRY_VALUE - rawValue) /
-              (SENSOR_DRY_VALUE - SENSOR_WET_VALUE)) *
-            100
-          );
-
-          newData[hour] = {
-            time: `${hour}:00`,
-            moisture: moisturePercentage,
-            rawValue: rawValue,
-            date: now.toISOString(),
+    eventSource.onmessage = (event) => {
+      let change;
+      try {
+        change = JSON.parse(event.data);
+      } catch {
+        // Not JSON, ignore (debug print or keep-alive)
+        return;
+      }
+      if (change.operationType === 'insert' && change.fullDocument) {
+        const doc = change.fullDocument;
+        setLiveData((current) => {
+          const dateObj = new Date(doc.timestamp);
+          const hour = dateObj.getHours();
+          return {
+            ...current,
+            [hour]: {
+              time: `${hour}:00`,
+              moisture: doc.moisturePercentage,
+              rawValue: doc.rawValue,
+              date: doc.timestamp,
+            }
           };
-
-          return newData;
         });
-      }, 2000);
-    } else {
-      // Reset to historical data when realtime is turned off
-      setMockData(generateMockData(new Date(selectedDate)));
-    }
-
-    return () => {
-      if (interval) {
-        clearInterval(interval);
       }
     };
-  }, [isRealtime]); // Remove selectedDate dependency
 
-  // Update data when date changes (only in non-realtime mode)
+    eventSource.onerror = (err) => {
+      console.error('SSE error:', err);
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, []); // Always listen
+  useEffect(()=>{
+    console.log(selectedDate)
+    console.log(isRealtime)
+  }, [isRealtime])
+
+  // Fetch initial data for today in realtime mode
+  useEffect(() => {
+    if (isRealtime) {
+      const today = new Date();
+      const startOfDay = new Date(today);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(today);
+      endOfDay.setHours(23, 59, 59, 999);
+      const start = Math.floor(startOfDay.getTime() / 1000);
+      const end = Math.floor(endOfDay.getTime() / 1000);
+      const fetchInitial = async () => {
+        try {
+          const res = await fetch(`/api/soil-moisture/history?start=${start}&end=${end}`);
+          const result = await res.json();
+          if (result.status === 'success' && Array.isArray(result.data)) {
+            const mapped: ChartDatum[] = result.data.map((doc: any): ChartDatum => {
+              const dateObj = new Date(doc.timestamp);
+              const hour = dateObj.getHours();
+              return {
+                time: `${hour}:00`,
+                moisture: doc.moisturePercentage,
+                rawValue: doc.rawValue,
+                date: doc.timestamp,
+                dateObj,
+              };
+            });
+            // Convert to hour-keyed object for liveData
+            const liveObj: Record<string, ChartDatum> = {};
+            mapped.forEach((d: ChartDatum) => {
+              liveObj[d.time] = d;
+            });
+            setLiveData(liveObj);
+          } else {
+            setLiveData({});
+          }
+        } catch {
+          setLiveData({});
+        }
+      };
+      fetchInitial();
+    }
+  }, [isRealtime]);
+
+  // Fetch all historical data once and set available dates
   useEffect(() => {
     if (!isRealtime) {
-      setMockData(generateMockData(new Date(selectedDate)));
+      const fetchAllHistorical = async () => {
+        try {
+          const res = await fetch('/api/soil-moisture/history');
+          const result = await res.json();
+          if (result.status === 'success' && Array.isArray(result.data)) {
+            const mapped: ChartDatum[] = result.data.map((doc: any): ChartDatum => {
+              const dateObj = new Date(doc.timestamp);
+              const hour = dateObj.getHours();
+              return {
+                time: `${hour}:00`,
+                moisture: doc.moisturePercentage,
+                rawValue: doc.rawValue,
+                date: doc.timestamp,
+                dateObj,
+              };
+            });
+            setChartData(mapped);
+            // Get unique dates, exclude today
+            const todayStr = new Date().toDateString();
+            const dateSet = new Set<string>();
+            mapped.forEach((d) => {
+              const dStr = d.dateObj.toDateString();
+              if (dStr !== todayStr) {
+                dateSet.add(dStr);
+              }
+            });
+            const dates = Array.from(dateSet).map(d => new Date(d)).sort((a, b) => a.getTime() - b.getTime());
+            setAvailableDates(dates);
+            if (!selectedDate && dates.length > 0) {
+              setSelectedDate(dates[0]);
+            }
+          }
+        } catch {
+          setChartData([]);
+          setAvailableDates([]);
+        }
+      };
+      fetchAllHistorical();
     }
-  }, [selectedDate, isRealtime]);
+  }, [isRealtime]);
+
+  // Filter chart data for selected date and fill missing hours
+  useEffect(() => {
+    if (!isRealtime && selectedDate && chartData.length > 0) {
+      const filtered = chartData.filter((d: ChartDatum) => {
+        return d.dateObj.toDateString() === selectedDate.toDateString();
+      });
+      // Map hour to ChartDatum
+      const hourMap = new Map<number, ChartDatum>();
+      filtered.forEach((d) => {
+        const hour = d.dateObj.getHours();
+        hourMap.set(hour, d);
+      });
+      // Fill all 24 hours
+      const filled: ChartDatum[] = Array.from({ length: 24 }, (_, hour) => {
+        if (hourMap.has(hour)) {
+          return hourMap.get(hour)!;
+        } else {
+          // Empty/default value for missing hour
+          return {
+            time: `${hour}:00`,
+            moisture: NaN,
+            rawValue: NaN,
+            date: selectedDate.toISOString(),
+            dateObj: new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate(), hour, 0, 0, 0),
+          };
+        }
+      });
+      setFilteredChartData(filled);
+    }
+  }, [selectedDate, isRealtime, chartData]);
+
+  // Prefill realtime chart with all 24 hours
+  const realtimeChartData: ChartDatum[] = Array.from({ length: 24 }, (_, hour) => {
+    if (liveData[`${hour}:00`]) {
+      const d = liveData[`${hour}:00`];
+      return {
+        ...d,
+        time: `${hour}:00`,
+        dateObj: new Date(d.date),
+      };
+    } else {
+      // Empty/default value for missing hour
+      const today = new Date();
+      return {
+        time: `${hour}:00`,
+        moisture: NaN,
+        rawValue: NaN,
+        date: today.toISOString(),
+        dateObj: new Date(today.getFullYear(), today.getMonth(), today.getDate(), hour, 0, 0, 0),
+      };
+    }
+  });
 
   const chartConfig = {
     percentage: {
@@ -151,9 +238,25 @@ export default function Home() {
     },
   };
 
-  const handleWater = () => {
+  const handleWater = async () => {
     setIsWatering(true);
-    // Simulate watering action using the selected duration
+    try {
+      const res = await fetch('/api/test-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ watering: true, time: waterDuration })
+      });
+      if (res.status === 409) {
+        const result = await res.json();
+        alert(result.message || 'Command already present.');
+        setIsWatering(false);
+        return;
+      }
+      const result = await res.json();
+      console.log('Watering response:', result);
+    } catch (error) {
+      console.error('Error sending watering command:', error);
+    }
     setTimeout(() => setIsWatering(false), waterDuration * 1000);
   };
 
@@ -183,11 +286,10 @@ export default function Home() {
               <button
                 onClick={() => {
                   if (!isRealtime) {
-                    const today = new Date();
-                    setSelectedDate(today);
-                    setMockData(generateMockData(today));
+                    // setSelectedDate(new Date());
                   }
                   setIsRealtime(!isRealtime);
+                
                 }}
                 className={`
                   relative inline-flex h-6 w-11 items-center rounded-full
@@ -205,31 +307,32 @@ export default function Home() {
               </button>
             </div>
           </div>
-          <div
-            className={`flex gap-2 overflow-x-auto pb-2 -mx-2 px-2 ${isRealtime ? "opacity-50" : ""
-              }`}
-          >
-            {MOCK_DATES.map((date) => (
-              <button
-                key={date.toISOString()}
-                onClick={() => !isRealtime && setSelectedDate(date)}
-                disabled={isRealtime}
-                className={`
-                  min-w-[100px] px-4 py-2 rounded-lg font-medium
-                  ${date.toISOString() === selectedDate.toISOString()
-                    ? "bg-blue-600 text-white shadow-lg"
-                    : "bg-gray-100 text-gray-800 hover:bg-gray-200 hover:shadow"
-                  }
-                  transition-all duration-150 transform hover:-translate-y-0.5
-                `}
-              >
-                {date.toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                })}
-              </button>
-            ))}
-          </div>
+          {/* Date buttons for selecting historical date */}
+          {!isRealtime && availableDates.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {availableDates.filter(date => date.toDateString() !== new Date().toDateString()).map((date) => {
+                const label = date.toLocaleDateString();
+                const isSelected = selectedDate && date.toDateString() === selectedDate.toDateString();
+                return (
+                  <button
+                    key={date.toISOString()}
+                    onClick={() => setSelectedDate(date)}
+                    className={`px-3 py-1 rounded-lg font-medium border transition-all duration-150 ${isSelected ? "bg-blue-600 text-white border-blue-600" : "bg-gray-100 text-gray-700 border-gray-300 hover:bg-blue-100 hover:border-blue-400"}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {/* Show today's date as label in realtime mode */}
+          {isRealtime && (
+            <div className="mt-2">
+              <span className="px-3 py-1 rounded-lg font-medium bg-blue-100 text-blue-800 border border-blue-300">
+                {new Date().toLocaleDateString()} (Today)
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Moisture Chart */}
@@ -271,44 +374,107 @@ export default function Home() {
               : `Showing raw sensor values (${SENSOR_WET_VALUE} = wet, ${SENSOR_DRY_VALUE} = dry)`}
           </p>
           <div className="h-[400px] transition-all duration-300">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={mockData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis
-                  dataKey="time"
-                  label={{ value: "Time", position: "bottom" }}
-                />
-                <YAxis
-                  domain={chartConfig[viewMode].domain}
-                  label={{
-                    value: chartConfig[viewMode].label,
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
-                <Tooltip formatter={chartConfig[viewMode].formatter} />
-                <defs>
-                  <linearGradient
-                    id="colorGradient"
-                    x1="0"
-                    y1="0"
-                    x2="0"
-                    y2="1"
-                  >
-                    <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.9} />
-                    <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.9} />
-                  </linearGradient>
-                </defs>
-                <Line
-                  type="monotone"
-                  dataKey={chartConfig[viewMode].dataKey}
-                  stroke="url(#colorGradient)"
-                  strokeWidth={3}
-                  dot={false}
-                  animationDuration={300}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {isRealtime ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={realtimeChartData}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="time"
+                    label={{ value: "Hour (0-23)", position: "bottom", offset: 10 }}
+                    type="category"
+                    allowDuplicatedCategory={false}
+                    ticks={Array.from({ length: 24 }, (_, i) => `${i}:00`)}
+                    tick={{ fontSize: 12, dx: 0, dy: 8 }}
+                  />
+                  <YAxis
+                    domain={chartConfig[viewMode].domain}
+                    label={{
+                      value: chartConfig[viewMode].label,
+                      angle: -90,
+                      position: "insideLeft",
+                    }}
+                    allowDataOverflow={true}
+                    tick={{ fontSize: 12 }}
+                  />
+                  <Tooltip formatter={chartConfig[viewMode].formatter} />
+                  <defs>
+                    <linearGradient
+                      id="colorGradient"
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
+                      <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.9} />
+                      <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.9} />
+                    </linearGradient>
+                  </defs>
+                  <Line
+                    type="monotone"
+                    dataKey={chartConfig[viewMode].dataKey}
+                    // stroke="url(#colorGradient)"
+                    strokeWidth={3}
+                    // dot={{ r: 4, stroke: "#4f46e5", strokeWidth: 2, fill: "#fff" }}
+                    // label
+                    animationDuration={300}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : selectedDate ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={[...filteredChartData].sort((a, b) => parseInt(a.time) - parseInt(b.time))}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="time"
+                    label={{ value: "Hour (0-23)", position: "bottom", offset: 10 }}
+                    type="category"
+                    allowDuplicatedCategory={false}
+                    ticks={Array.from({ length: 24 }, (_, i) => `${i}:00`)}
+                    tick={{ fontSize: 12, dx: 0, dy: 8 }}
+                  />
+                  <YAxis
+                    domain={chartConfig[viewMode].domain}
+                    label={{
+                      value: chartConfig[viewMode].label,
+                      angle: -90,
+                      position: "insideLeft",
+                    }}
+                    allowDataOverflow={true}
+                    tick={{ fontSize: 12 }}
+                  />
+                  <Tooltip formatter={chartConfig[viewMode].formatter} />
+                  <defs>
+                    <linearGradient
+                      id="colorGradient"
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
+                      <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.9} />
+                      <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.9} />
+                    </linearGradient>
+                  </defs>
+                  <Line
+                    type="monotone"
+                    dataKey={chartConfig[viewMode].dataKey}
+                    // stroke="url(#colorGradient)"
+                    strokeWidth={3}
+                    // dot={{ r: 4, stroke: "#4f46e5", strokeWidth: 2, fill: "#fff" }}
+                    // label
+                    animationDuration={300}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-400 text-lg">No data available</div>
+            )}
           </div>
         </div>
 
@@ -359,10 +525,9 @@ export default function Home() {
                 disabled={isWatering}
                 className={`
                   w-16 px-2 py-1 rounded border text-center
-                  ${isWatering
-                    ? "bg-gray-100 border-gray-300"
-                    : "bg-white border-cyan-200 hover:border-cyan-500 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-200"
-                  }
+                   bg-gray-100 border-gray-300
+                   text-gray-600
+
                   transition-all duration-150 outline-none
                 `}
               />
