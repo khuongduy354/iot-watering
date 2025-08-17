@@ -16,6 +16,7 @@ import connectDB from "@/lib/mongodb";
 const SENSOR_DRY_VALUE = 880; // Sensor reading in dry soil
 const SENSOR_WET_VALUE = 460; // Sensor reading in wet soil
 
+
 export default function Home() {
   const [isWatering, setIsWatering] = useState(false);
   const [waterDuration, setWaterDuration] = useState(5);
@@ -373,6 +374,7 @@ export default function Home() {
               ? "Showing moisture percentage (0-100%) calculated from sensor readings"
               : `Showing raw sensor values (${SENSOR_WET_VALUE} = wet, ${SENSOR_DRY_VALUE} = dry)`}
           </p>
+
           <div className="h-[400px] transition-all duration-300">
             {isRealtime ? (
               <ResponsiveContainer width="100%" height="100%">
